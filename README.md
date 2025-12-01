@@ -1,68 +1,226 @@
-# Thor AI - Vuzix Blade 2 Native App
+# Thor Vuzix AI Assistant
 
-Native Android app for Vuzix Blade 2 that connects to Thor AI service.
+Native Android app for Vuzix Blade 2 AR glasses with WebSocket connection to Thor AI service.
 
-## Features
-- Direct WebSocket connection to Thor (ws://192.168.1.207:8765)
-- Simple HUD interface with status indicator
-- Microphone button for voice commands
-- Displays AI responses in real-time
-- No HTTPS/certificate issues (uses native sockets)
+## Quick Start
 
-## Building the App
+### 1. Download APK
 
-### Option 1: Build on a Linux/Mac/Windows machine with Android SDK
+**GitHub Actions (Recommended):**
+https://github.com/xprodevelopment/thor-vuzix-app/actions
 
-1. **Install Android Studio** or just Android SDK command-line tools
-2. **Navigate to project:**
-   ```bash
-   cd /home/xproadmin/AGIPROJECT/vuzix-thor-stream/vuzix-app
-   ```
-3. **Build APK:**
-   ```bash
-   ./gradlew assembleDebug
-   ```
-4. **Output:** `app/build/outputs/apk/debug/app-debug.apk`
+1. Click latest "Build Android APK" workflow (✅ green checkmark)
+2. Download artifact: `thor-vuzix-debug-apk.zip`
+3. Unzip to get `app-debug.apk`
 
-### Option 2: Use pre-built Docker container
+### 2. Install on Vuzix
 
 ```bash
-docker run --rm -v $(pwd):/project mingc/android-build-box bash -c "cd /project && ./gradlew assembleDebug"
-```
+# Transfer APK to Thor (if downloaded elsewhere)
+scp app-debug.apk xproadmin@192.168.1.207:~/
 
-### Option 3: Transfer to x86 machine and build there
-
-Since Thor is ARM64 and Android SDK doesn't run natively here, transfer the `vuzix-app/` folder to any x86 machine with Android Studio.
-
-## Installing on Vuzix
-
-```bash
+# On Thor - Install to Vuzix
 adb connect 192.168.1.34:5555
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install -r app-debug.apk
 ```
 
-## Running the App
+### 3. Launch App
 
-1. Ensure Thor AI service is running:
-   ```bash
-   python3 /home/xproadmin/AGIPROJECT/vuzix-thor-stream/thor-service/ai_service.py
-   ```
+```bash
+adb shell am start -n com.thor.vuzix/.MainActivity
+```
 
-2. Launch app on Vuzix (or it auto-launches if installed)
+The app should connect to Thor AI at `ws://192.168.1.207:8765` automatically.
 
-3. App will connect to `ws://192.168.1.207:8765`
+---
 
-4. Tap microphone button to send voice commands
+## Architecture
+
+```
+Vuzix Blade 2 (192.168.1.34)
+    ↓ WebSocket (JSON)
+Thor AI Service (192.168.1.207:8765)
+    ↓ HTTP API
+Triton + vLLM (localhost:8000)
+```
+
+**Message Format:**
+```json
+{
+  "title": "THOR AI",
+  "body": "Response text here...",
+  "timestamp": "2025-12-01T01:52:09.658116"
+}
+```
+
+---
+
+## Thor AI Service
+
+The WebSocket server that handles Vuzix connections is located at:
+`/home/xproadmin/AGIPROJECT/vuzix-thor-stream/thor_ai_service.py`
+
+### Service Control
+
+```bash
+cd /home/xproadmin/AGIPROJECT/vuzix-thor-stream
+
+./thor_service.sh start      # Start service
+./thor_service.sh stop       # Stop service
+./thor_service.sh restart    # Restart service
+./thor_service.sh status     # Check status
+./thor_service.sh test       # Test WebSocket connection
+./thor_service.sh logs       # View logs (live tail)
+```
+
+### Service Status
+
+```bash
+# Check if running
+ps aux | grep thor_ai_service
+
+# Check port
+netstat -ln | grep 8765
+
+# View logs
+tail -f /tmp/thor_ai_service.log
+```
+
+---
+
+## Development
+
+### Rebuild APK
+
+**Using GitHub Actions:**
+```bash
+cd vuzix-app
+git add .
+git commit -m "Update"
+git push
+```
+
+Wait 5-10 minutes, then download from GitHub Actions artifacts.
+
+**Local Build (requires Android SDK):**
+```bash
+cd vuzix-app
+./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Testing
+
+**View Vuzix app logs:**
+```bash
+adb logcat | grep -E "(Thor|MainActivity|WebSocket)"
+```
+
+**View Thor AI service logs:**
+```bash
+tail -f /tmp/thor_ai_service.log
+```
+
+**Test WebSocket manually:**
+```python
+cd /home/xproadmin/AGIPROJECT/vuzix-thor-stream
+./thor_service.sh test
+```
+
+---
+
+## Project Structure
+
+```
+vuzix-app/
+├── .github/workflows/
+│   └── build-apk.yml              # GitHub Actions CI/CD
+├── app/
+│   ├── src/main/
+│   │   ├── java/com/thor/vuzix/
+│   │   │   ├── MainActivity.java           # Main UI & lifecycle
+│   │   │   └── ThorWebSocketClient.java    # WebSocket client
+│   │   ├── res/
+│   │   │   └── layout/activity_main.xml    # UI layout
+│   │   └── AndroidManifest.xml
+│   └── build.gradle
+├── gradle/wrapper/
+│   └── gradle-wrapper.properties
+├── gradlew
+└── README.md
+```
+
+---
+
+## Network Configuration
+
+| Device | IP Address | Port | Service |
+|--------|------------|------|---------|
+| Thor AGX | 192.168.1.207 | 8765 | WebSocket server |
+| Thor AGX | 192.168.1.207 | 8000 | Triton inference |
+| Vuzix Blade 2 | 192.168.1.34 | 5555 | ADB |
+
+---
 
 ## Troubleshooting
 
-- **App won't connect:** Verify Thor AI service is running on port 8765
-- **WebSocket error:** Check network connectivity between Vuzix and Thor
-- **Permissions denied:** Grant camera/microphone permissions in Android settings
+### App Shows "DISCONNECTED"
+
+**Check Thor AI service:**
+```bash
+./thor_service.sh status
+./thor_service.sh restart
+```
+
+**Check network:**
+```bash
+# Test connectivity
+adb shell ping 192.168.1.207
+
+# Check firewall
+sudo ufw allow 8765
+```
+
+### App Crashes
+
+```bash
+# View crash logs
+adb logcat -b crash
+
+# Reinstall
+adb uninstall com.thor.vuzix
+adb install -r app-debug.apk
+```
+
+### Can't Connect via ADB
+
+```bash
+# Reconnect
+adb disconnect
+adb connect 192.168.1.34:5555
+adb devices
+```
+
+---
 
 ## Next Steps
 
-- Add speech recognition for voice input
-- Add camera streaming to Thor
-- Improve UI for Vuzix display
-- Add gesture controls
+- [ ] Integrate Triton LLM for actual AI responses
+- [ ] Add speech recognition (SpeechRecognizer)
+- [ ] Add camera streaming to Thor
+- [ ] Add text-to-speech responses
+- [ ] Add gesture controls
+- [ ] Add settings UI
+
+---
+
+## Files
+
+- `MainActivity.java` - Main app UI, WebSocket connection management
+- `ThorWebSocketClient.java` - WebSocket client implementation
+- `thor_ai_service.py` - Thor-side WebSocket server (in parent directory)
+- `thor_service.sh` - Service control script (in parent directory)
+
+---
+
+**Status:** ✅ Working - Thor AI Service running, ready for connections
