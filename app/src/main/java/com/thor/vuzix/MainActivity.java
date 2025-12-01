@@ -1,7 +1,6 @@
 package com.thor.vuzix;
 
 import android.app.Activity;
-import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -10,28 +9,33 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.graphics.Color;
 import android.util.Log;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
-import android.speech.RecognitionListener;
+import android.util.Base64;
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final String TAG = "ThorVuzix";
     private static final String THOR_WS_URL = "ws://192.168.1.207:8765";
     private static final int PERMISSION_REQUEST_RECORD_AUDIO = 1;
 
+    // Audio recording settings
+    private static final int SAMPLE_RATE = 16000;
+    private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
+    private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
+
     private TextView statusText;
     private TextView responseText;
     private Button micButton;
     private ThorWebSocketClient wsClient;
     private Handler mainHandler;
-    private SpeechRecognizer speechRecognizer;
-    private boolean isListening = false;
+    private AudioRecord audioRecord;
+    private boolean isRecording = false;
+    private Thread recordingThread;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,101 +54,16 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, PERMISSION_REQUEST_RECORD_AUDIO);
         }
 
-        // Initialize speech recognizer
-        initSpeechRecognizer();
-
         // Microphone button click handler
         micButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                toggleMicrophone();
+                toggleRecording();
             }
         });
 
         // Connect to Thor WebSocket
         connectToThor();
-    }
-
-    private void initSpeechRecognizer() {
-        if (SpeechRecognizer.isRecognitionAvailable(this)) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            speechRecognizer.setRecognitionListener(new RecognitionListener() {
-                @Override
-                public void onReadyForSpeech(Bundle params) {
-                    responseText.setText("Listening...");
-                }
-
-                @Override
-                public void onBeginningOfSpeech() {
-                    responseText.setText("Hearing you...");
-                }
-
-                @Override
-                public void onRmsChanged(float rmsdB) {}
-
-                @Override
-                public void onBufferReceived(byte[] buffer) {}
-
-                @Override
-                public void onEndOfSpeech() {
-                    responseText.setText("Processing...");
-                    stopListening();
-                }
-
-                @Override
-                public void onError(int error) {
-                    String errorMsg = getErrorMessage(error);
-                    Log.e(TAG, "Speech error: " + errorMsg);
-                    responseText.setText("Error: " + errorMsg + "\nTap mic to retry");
-                    stopListening();
-                }
-
-                @Override
-                public void onResults(Bundle results) {
-                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if (matches != null && !matches.isEmpty()) {
-                        String spokenText = matches.get(0);
-                        Log.i(TAG, "Recognized: " + spokenText);
-                        responseText.setText("You said:\n" + spokenText);
-
-                        // Send to Thor AI
-                        if (wsClient != null) {
-                            wsClient.sendMessage("{\"text\":\"" + spokenText.replace("\"", "\\\"") + "\"}");
-                        }
-                    }
-                    stopListening();
-                }
-
-                @Override
-                public void onPartialResults(Bundle partialResults) {
-                    ArrayList<String> partial = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if (partial != null && !partial.isEmpty()) {
-                        responseText.setText("..." + partial.get(0));
-                    }
-                }
-
-                @Override
-                public void onEvent(int eventType, Bundle params) {}
-            });
-        } else {
-            Log.e(TAG, "Speech recognition not available");
-            responseText.setText("Speech not available\non this device");
-        }
-    }
-
-    private String getErrorMessage(int error) {
-        switch (error) {
-            case SpeechRecognizer.ERROR_AUDIO: return "Audio error";
-            case SpeechRecognizer.ERROR_CLIENT: return "Client error";
-            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS: return "Need mic permission";
-            case SpeechRecognizer.ERROR_NETWORK: return "Network error";
-            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT: return "Network timeout";
-            case SpeechRecognizer.ERROR_NO_MATCH: return "No match found";
-            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY: return "Recognizer busy";
-            case SpeechRecognizer.ERROR_SERVER: return "Server error";
-            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT: return "No speech heard";
-            default: return "Unknown error";
-        }
     }
 
     private void connectToThor() {
@@ -158,6 +77,7 @@ public class MainActivity extends Activity {
                         public void run() {
                             statusText.setText("CONNECTED");
                             statusText.setTextColor(Color.parseColor("#44FF44"));
+                            responseText.setText("Tap mic to speak\n(records 3 seconds)");
                         }
                     });
                 }
@@ -198,56 +118,119 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void toggleMicrophone() {
-        if (isListening) {
-            stopListening();
+    private void toggleRecording() {
+        if (isRecording) {
+            stopRecording();
         } else {
-            startListening();
+            startRecording();
         }
     }
 
-    private void startListening() {
-        if (speechRecognizer == null) {
-            responseText.setText("Speech not available");
-            return;
-        }
-
+    private void startRecording() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             responseText.setText("Mic permission needed");
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, PERMISSION_REQUEST_RECORD_AUDIO);
             return;
         }
 
-        isListening = true;
-        micButton.setBackgroundColor(Color.parseColor("#FF4444"));
-        micButton.setText("⏹");
-
-        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        int bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
+        if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
+            bufferSize = SAMPLE_RATE * 2; // 1 second of audio
+        }
 
         try {
-            speechRecognizer.startListening(intent);
+            audioRecord = new AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT,
+                bufferSize
+            );
+
+            if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                responseText.setText("Audio init failed");
+                return;
+            }
+
+            isRecording = true;
+            micButton.setBackgroundColor(Color.parseColor("#FF4444"));
+            micButton.setText("⏹");
+            responseText.setText("Recording...\n(3 seconds)");
+
+            audioRecord.startRecording();
+
+            // Record for 3 seconds then send
+            recordingThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    recordAndSend();
+                }
+            });
+            recordingThread.start();
+
+        } catch (SecurityException e) {
+            Log.e(TAG, "Security exception: " + e.getMessage());
+            responseText.setText("Mic permission denied");
         } catch (Exception e) {
-            Log.e(TAG, "Error starting speech recognition: " + e.getMessage());
-            responseText.setText("Error starting mic");
-            stopListening();
+            Log.e(TAG, "Error starting recording: " + e.getMessage());
+            responseText.setText("Recording error");
         }
     }
 
-    private void stopListening() {
-        isListening = false;
+    private void recordAndSend() {
+        // Record 3 seconds of audio
+        int totalSamples = SAMPLE_RATE * 3; // 3 seconds
+        short[] audioData = new short[totalSamples];
+        int samplesRead = 0;
+
+        while (samplesRead < totalSamples && isRecording) {
+            int result = audioRecord.read(audioData, samplesRead, Math.min(1024, totalSamples - samplesRead));
+            if (result > 0) {
+                samplesRead += result;
+            } else {
+                break;
+            }
+        }
+
+        // Stop recording
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                stopRecording();
+                responseText.setText("Sending to Thor...");
+            }
+        });
+
+        // Convert to bytes and base64 encode
+        byte[] audioBytes = new byte[samplesRead * 2];
+        for (int i = 0; i < samplesRead; i++) {
+            audioBytes[i * 2] = (byte) (audioData[i] & 0xff);
+            audioBytes[i * 2 + 1] = (byte) ((audioData[i] >> 8) & 0xff);
+        }
+
+        String audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP);
+
+        // Send to Thor
+        if (wsClient != null) {
+            String message = "{\"type\":\"audio\",\"format\":\"pcm16\",\"sample_rate\":16000,\"data\":\"" + audioBase64 + "\"}";
+            wsClient.sendMessage(message);
+            Log.i(TAG, "Sent " + audioBytes.length + " bytes of audio");
+        }
+    }
+
+    private void stopRecording() {
+        isRecording = false;
         micButton.setBackgroundColor(Color.parseColor("#0099FF"));
         micButton.setText("🎤");
 
-        if (speechRecognizer != null) {
+        if (audioRecord != null) {
             try {
-                speechRecognizer.stopListening();
+                audioRecord.stop();
+                audioRecord.release();
             } catch (Exception e) {
-                Log.e(TAG, "Error stopping speech recognition: " + e.getMessage());
+                Log.e(TAG, "Error stopping recording: " + e.getMessage());
             }
+            audioRecord = null;
         }
     }
 
@@ -266,9 +249,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (speechRecognizer != null) {
-            speechRecognizer.destroy();
-        }
+        stopRecording();
         if (wsClient != null) {
             wsClient.close();
         }
