@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:background="#000000"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:padding="4dp">
 
     <!-- Status indicator at top -->
     <TextView
@@ -13,31 +13,38 @@
         android:layout_height="wrap_content"
         android:text="CONNECTING..."
         android:textColor="#FF4444"
-        android:textSize="18sp"
+        android:textSize="14sp"
         android:textStyle="bold"
         android:gravity="center"
-        android:padding="4dp" />
+        android:padding="2dp" />
 
-    <!-- AI Response display - takes most space -->
-    <TextView
-        android:id="@+id/responseText"
+    <!-- Scrollable AI Response display -->
+    <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:text="Tap mic to speak"
-        android:textColor="#FFFFFF"
-        android:textSize="24sp"
-        android:gravity="center"
-        android:padding="8dp" />
+        android:fillViewport="true">
+
+        <TextView
+            android:id="@+id/responseText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Tap mic to speak"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:gravity="center"
+            android:padding="4dp" />
+
+    </ScrollView>
 
     <!-- Microphone button at bottom -->
     <Button
         android:id="@+id/micButton"
-        android:layout_width="80dp"
-        android:layout_height="80dp"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
         android:layout_gravity="center_horizontal"
         android:text="🎤"
-        android:textSize="40sp"
-        android:layout_marginBottom="8dp" />
+        android:textSize="30sp"
+        android:layout_marginBottom="4dp" />
 
 </LinearLayout>
